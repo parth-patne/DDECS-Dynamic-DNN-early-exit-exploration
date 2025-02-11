@@ -36,8 +36,8 @@ pip install -r requirements.txt
 ## Quickstart
 1. Clone and Set Up
 ```bash
-git clone https://github.com/YourUsername/rl-agent-early-exit-dnn.git
-cd rl-agent-early-exit-dnn
+git clone https://github.com/YourUsername/DDECS-Dynamic-DNN-early-exit-exploration.git
+cd DDECS-Dynamic-DNN-early-exit-exploration
 pip install -r requirements.txt
 ```
 2. Run Training & Evaluation
