@@ -10,13 +10,10 @@ This repository contains code to reproduce results from our paper *“RL-Agent-b
 
 If you use this codebase or build upon our RL-based early-exit approach, please cite:
 
-@inproceedings{YourRLAgentEarlyExitPaper, title = {RL-Agent-based Early-Exit DNN Architecture Search Framework}, author = {Your Name and Coauthors}, booktitle = {Some Conference or Journal}, year = {2023}, ... }
-
-markdown
-Copy
-Edit
-
----
+    @article{,
+      title={DDECS},
+      author={Parth Patne, Mahdi Taheri}
+    }
 
 ## Requirements
 
