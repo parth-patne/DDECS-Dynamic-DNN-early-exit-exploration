@@ -10,3 +10,22 @@ This repository contains code to reproduce results from our paper *“RL-Agent-b
 
 If you use this codebase or build upon our RL-based early-exit approach, please cite:
 
+
+---
+
+## Requirements
+
+- A machine with a decent GPU (optional but recommended)
+- Python ≥3.7 (tested with Python 3.8/3.9)
+- Dependencies listed in `requirements.txt` (e.g., PyTorch, pynvml, etc.)
+
+### Python Dependencies
+
+- [PyTorch](https://pytorch.org/) (≥1.7)
+- numpy, pandas, matplotlib, scikit-learn, seaborn, etc.
+- pynvml for GPU power monitoring
+
+Install everything with:
+```bash
+pip install -r requirements.txt
+
