@@ -48,22 +48,6 @@ This script trains a 2-exit AlexNet model with RL-based thresholding on the CIFA
 To evaluate or measure GPU power usage, add flags such as --evaluate or --power_measurement.
 
 
-## Run with Docker
-Install Docker and ensure it’s running.
-Build the Docker image:
-```bash
-./docker/build.sh
-```
-Start a shell inside the container:
-```bash
-./docker/shell.sh
-```
-Once inside the container, run:
-```bash
-python src/dynamic-alexnet-2-early-exits.py --dataset cifar10 --epochs 30
-```
-For GPU support, you may need to customize the Dockerfile with CUDA libraries, and run it via nvidia-docker.
-
 ## Contact
 
 For questions, please create an issue in the repository or reach out at parth.patne123@gmail.com
