@@ -64,7 +64,8 @@ python src/dynamic-alexnet-2-early-exits.py --dataset cifar10 --epochs 30
 ```
 For GPU support, you may need to customize the Dockerfile with CUDA libraries, and run it via nvidia-docker.
 
-Contact
+## Contact
+
 For questions, please create an issue in the repository or reach out at parth.patne123@gmail.com
 
 
