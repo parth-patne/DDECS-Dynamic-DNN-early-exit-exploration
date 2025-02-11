@@ -12,7 +12,7 @@ If you use this codebase or build upon our RL-based early-exit approach, please 
 
     @article{,
       title={DDECS},
-      author={Parth Patne, Mahdi Taheri}
+      author={}
     }
 
 ## Requirements
