@@ -46,9 +46,10 @@ pip install -r requirements.txt
 2. Run Training & Evaluation
 ```bash
 python src/dynamic-alexnet-2-early-exits.py --dataset cifar10 --epochs 30 --learning_rate 0.001
+```
 This script trains a 2-exit AlexNet model with RL-based thresholding on the CIFAR-10 dataset.
 To evaluate or measure GPU power usage, add flags such as --evaluate or --power_measurement.
-```
+
 
 ## Run with Docker
 Install Docker and ensure it’s running.
