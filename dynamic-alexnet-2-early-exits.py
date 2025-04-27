@@ -19,17 +19,75 @@ import queue
 
 from torch.amp import GradScaler, autocast
 
-# ---------------------------
-# Model Definitions
-# ---------------------------
+def calibrate_exit_times_alexnet(model, device, loader, n_batches=10):
+
+    import torch
+    if not torch.cuda.is_available():
+        print("Warning: CUDA not available, cannot perform precise exit time calibration. Returning zeros.")
+        return [0.0] * 3
+    model.training_mode = False
+    model.eval()
+    model.to(device)
+    n_batches = min(n_batches, len(loader))
+    if n_batches == 0:
+        print("Warning: Loader is empty, cannot calibrate exit times.")
+        return [0.0] * 3
+    exit_times_ms = [0.0] * 3
+    total_samples_processed = 0
+    with torch.no_grad():
+        batch_count = 0
+        for images, _ in loader:
+            if batch_count >= n_batches:
+                break
+            images = images.to(device)
+            batch_size = images.size(0)
+            total_samples_processed += batch_size
+            # CUDA events for timing
+            start_event = torch.cuda.Event(enable_timing=True)
+            exit_events = [torch.cuda.Event(enable_timing=True) for _ in range(3)]
+            x_current = images
+            # Exit 1
+            start_event.record()
+            x1 = model.features1(x_current)
+            out1 = model.exit1(x1)
+            exit_events[0].record()
+            # Exit 2
+            x2 = model.features2(x1)
+            out2 = model.exit2(x2)
+            exit_events[1].record()
+            # Final exit
+            x_final = model.final_features(x2)
+            x_final = model.adaptive_pool(x_final)
+            x_final = x_final.view(x_final.size(0), -1)
+            out_final = model.output_layer(x_final)
+            exit_events[2].record()
+            torch.cuda.synchronize()
+            for i in range(3):
+                exit_times_ms[i] += start_event.elapsed_time(exit_events[i])
+            batch_count += 1
+    if total_samples_processed == 0:
+        print("Warning: No samples processed during calibration.")
+        return [0.0] * 3
+    avg_exit_times_s = [(t_ms / total_samples_processed) / 1000.0 for t_ms in exit_times_ms]
+    print(f"Calibrated AlexNet exit times (s/sample): {avg_exit_times_s}")
+    return avg_exit_times_s
+
 class QLearningAgent:
+    @staticmethod
+    def _q_table_factory():
+        return np.zeros(2)
+
     def __init__(self, n_exits, epsilon=0.1, alpha=0.1, gamma=0.9):
-        """Initialize the Q-Learning agent."""
+
         self.n_exits = n_exits
         self.epsilon = epsilon
         self.alpha = alpha
         self.gamma = gamma
-        self.q_table = defaultdict(lambda: np.zeros(2))
+        self.q_table = defaultdict(QLearningAgent._q_table_factory)
+
+    def export_q_table(self):
+
+        return {k: v.copy() for k, v in self.q_table.items()}
 
     def get_state(self, layer_idx, confidence):
         conf_bin = int(confidence * 10)
@@ -48,7 +106,7 @@ class QLearningAgent:
 
 class EarlyExitBlock(nn.Module):
     def __init__(self, in_channels, num_classes):
-        """Early exit block with a shared conv layer and classifier."""
+
         super(EarlyExitBlock, self).__init__()
         self.shared_conv = nn.Sequential(
             nn.Conv2d(in_channels, in_channels // 2, kernel_size=3, stride=1, padding=1),
@@ -70,7 +128,7 @@ class EarlyExitBlock(nn.Module):
 
 class StaticAlexNet(nn.Module):
     def __init__(self, num_classes=10, in_channels=3):
-        """Standard AlexNet adapted for 32x32 inputs."""
+
         super(StaticAlexNet, self).__init__()
         self.features = nn.Sequential(
             nn.Conv2d(in_channels, 64, kernel_size=3, stride=1, padding=1),
@@ -116,10 +174,7 @@ class StaticAlexNet(nn.Module):
 
 class BranchyAlexNet(nn.Module):
     def __init__(self, num_classes=10, in_channels=3):
-        """
-        Branchy AlexNet with 2 early exits (after the first conv block and after the middle layers).
-        The final output layer acts as Exit 3.
-        """
+
         super(BranchyAlexNet, self).__init__()
         self.num_classes = num_classes
         self.training_mode = True
@@ -134,7 +189,7 @@ class BranchyAlexNet(nn.Module):
         )
         self.exit1 = EarlyExitBlock(64, num_classes)
 
-        # Combined middle layers (acts as Exit 2)
+        # (Exit 2)
         self.features2 = nn.Sequential(
             nn.Conv2d(64, 192, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
@@ -259,16 +314,18 @@ class BranchyAlexNet(nn.Module):
                         self.rl_agent.update(state, action, reward, next_state)
         return total_loss
 
-# ---------------------------
 # Data Loading
-# ---------------------------
+class RepeatChannelsTransform:
+    def __call__(self, x):
+        return x.repeat(3, 1, 1)
+
 def load_datasets(dataset_name='cifar10', batch_size=32):
     if dataset_name.lower() == 'mnist':
         transform = transforms.Compose([
             transforms.Resize(32),
             transforms.ToTensor(),
             transforms.Normalize((0.1307,), (0.3081,)),
-            transforms.Lambda(lambda x: x.repeat(3, 1, 1))
+            RepeatChannelsTransform()
         ])
         train_dataset = MNIST(root='./data', train=True, download=True, transform=transform)
         test_dataset = MNIST(root='./data', train=False, download=True, transform=transform)
@@ -288,9 +345,7 @@ def load_datasets(dataset_name='cifar10', batch_size=32):
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
     return train_loader, test_loader
 
-# ---------------------------
 # Training Functions
-# ---------------------------
 def train_static_alexnet(model, train_loader, test_loader=None, num_epochs=100, learning_rate=0.001, weights_path=None):
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
@@ -378,9 +433,7 @@ def train_branchy_alexnet(model, train_loader, test_loader, num_epochs=100, lear
         model.load_state_dict(best_model_state)
     return model
 
-# ---------------------------
 # Evaluation Functions
-# ---------------------------
 def evaluate_static_alexnet(model, test_loader):
     model.eval()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -403,8 +456,19 @@ def evaluate_static_alexnet(model, test_loader):
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
     accuracy = 100 * correct / total
-    avg_inference_time = (sum(inference_times) / len(inference_times)) * 1000
+    avg_inference_time = (sum(inference_times) / total) * 1000
     return accuracy, avg_inference_time
+
+def get_exit_indices(model):
+    """Helper to get all possible exit indices for a Branchy model based on its exit blocks."""
+    indices = []
+    for i in range(1, 10):
+        if hasattr(model, f"exit{i}"):
+            indices.append(i)
+    if hasattr(model, "classifier") and (len(indices) > 0):
+        final_exit_idx = max(indices) + 1
+        indices.append(final_exit_idx)
+    return indices
 
 def evaluate_branchy_alexnet(model, test_loader):
     model.eval()
@@ -414,7 +478,10 @@ def evaluate_branchy_alexnet(model, test_loader):
     correct = 0
     total = 0
     inference_times = []
-    exit_counts = {1: 0, 2: 0, 3: 0}  # Exit 1, Exit 2, and final output (Exit 3)
+    exit_counts = {}
+    exit_indices = get_exit_indices(model)
+    for exit_idx in exit_indices:
+        exit_counts[exit_idx] = 0
     with torch.no_grad():
         for images, labels in test_loader:
             images, labels = images.to(device), labels.to(device)
@@ -430,17 +497,27 @@ def evaluate_branchy_alexnet(model, test_loader):
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
-            for exit_idx in exit_counts.keys():
+            for exit_idx in exit_indices:
                 count = (exit_points == exit_idx).sum().item()
                 exit_counts[exit_idx] += count
-    accuracy = 100 * correct / total
-    avg_inference_time = (sum(inference_times) / total) * 1000
-    exit_percentages = {k: (v / total) * 100 for k, v in exit_counts.items()}
-    return accuracy, avg_inference_time, exit_percentages
+    accuracy = 100 * correct / total if total > 0 else 0
+    exit_percentages = {k: (v / total) * 100 for k, v in exit_counts.items()} if total > 0 else {k: 0 for k in exit_indices}
+    print("Calibrating BranchyAlexNet exit times...")
+    calibrated_times = calibrate_exit_times_alexnet(model, device, test_loader, n_batches=20)
+    if len(calibrated_times) < len(exit_indices):
+        calibrated_times = list(calibrated_times) + [0.0] * (len(exit_indices) - len(calibrated_times))
+    elif len(calibrated_times) > len(exit_indices):
+        calibrated_times = calibrated_times[:len(exit_indices)]
+    weighted_avg_time_s = 0.0
+    for idx, exit_idx in enumerate(exit_indices):
+        p = exit_percentages.get(exit_idx, 0) / 100.0
+        t = calibrated_times[idx]
+        weighted_avg_time_s += p * t
+    final_inference_time_ms = weighted_avg_time_s * 1000
+    print(f"Weighted Average Inference Time: {final_inference_time_ms:.2f} ms")
+    return accuracy, final_inference_time_ms, exit_percentages
 
-# ---------------------------
 # Power Monitoring
-# ---------------------------
 class PowerMonitor:
     def __init__(self):
         try:
@@ -464,9 +541,8 @@ class PowerMonitor:
                     power = pynvml.nvmlDeviceGetPowerUsage(self.handle) / 1000.0
                     self.power_measurements.put((time.time(), power))
                     time.sleep(0.005)
-                except pynvml.NVMLError as error:
-                    print(f"NVML Error during monitoring: {error}")
-                    break
+                except pynvml.NVMLError:
+                    pass
         self.monitor_thread = threading.Thread(target=monitor_power)
         self.monitor_thread.start()
 
@@ -516,9 +592,7 @@ def measure_power_consumption(model, test_loader, num_samples=100, device='cuda'
             results['inference_time'].append(inference_time / batch_size)
     return {k: np.mean(v) if v else 0 for k, v in results.items()}
 
-# ---------------------------
 # Visualization & Analysis Functions
-# ---------------------------
 def create_output_directory(dataset_name):
     output_dir = f'plots_{dataset_name.lower()}'
     if not os.path.exists(output_dir):
@@ -705,6 +779,10 @@ def run_experiments(dataset_name):
             'state_dict': branchy_alexnet.state_dict(),
             'accuracy': evaluate_branchy_alexnet(branchy_alexnet, test_loader)[0]
         }, branchy_weights_path)
+        # Save Q-table values for RL analysis
+        q_table_path = os.path.splitext(branchy_weights_path)[0] + "_q_table.npy"
+        np.save(q_table_path, branchy_alexnet.rl_agent.export_q_table())
+        print(f"\nBest model saved to {branchy_weights_path}\nQ-table saved to {q_table_path}")
 
     print("\nEvaluating Branchy AlexNet...")
     final_accuracy, final_inference_time, exit_percentages = evaluate_branchy_alexnet(branchy_alexnet, test_loader)
@@ -756,9 +834,7 @@ def run_experiments(dataset_name):
     plot_class_distribution(class_distributions, dataset_name)
     return results
 
-# ---------------------------
 # Main Execution
-# ---------------------------
 if __name__ == "__main__":
     torch.manual_seed(42)
     np.random.seed(42)
