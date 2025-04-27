@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import random
 import os
+import itertools  # for calibrate_exit_times_vgg batching
 
 from collections import defaultdict
 from torch.utils.data import DataLoader
@@ -28,17 +29,70 @@ import queue
 
 from torch.cuda.amp import GradScaler, autocast
 
+# --- Accurate CUDA timing for BranchyVGG exits ---
+def calibrate_exit_times_vgg(model, device, loader, n_batches=10):
+    """Measure cumulative per-exit times (s) for BranchyVGG via CUDA events."""
+    if not torch.cuda.is_available():
+        print("Warning: CUDA not available, cannot perform precise exit time calibration. Returning zeros.")
+        return [0.0] * 6
+    model.training_mode = False
+    model.eval()
+    model.to(device)
+    n_batches = min(n_batches, len(loader))
+    if n_batches == 0:
+        print("Warning: Loader is empty, cannot calibrate exit times.")
+        return [0.0] * 6
+    exit_times_ms = [0.0] * 6
+    total_samples_processed = 0
+    start_event = torch.cuda.Event(enable_timing=True)
+    exit_events = [torch.cuda.Event(enable_timing=True) for _ in range(6)]
+    feature_blocks = [model.features1, model.features2, model.features3, model.features4, model.features5]
+    exit_blocks = [model.exit1, model.exit2, model.exit3, model.exit4, model.exit5]
+    with torch.no_grad():
+        for images, _ in itertools.islice(loader, n_batches):
+            images = images.to(device)
+            batch_size = images.size(0)
+            total_samples_processed += batch_size
+            torch.cuda.synchronize()
+            start_event.record()
+            x_current = images
+            for i in range(5):
+                x_current = feature_blocks[i](x_current)
+                _ = exit_blocks[i](x_current)
+                exit_events[i].record()
+            final_output = model.classifier(x_current)
+            exit_events[5].record()
+            torch.cuda.synchronize()
+            for i in range(6):
+                exit_times_ms[i] += start_event.elapsed_time(exit_events[i])
+    if total_samples_processed == 0:
+        print("Warning: No samples processed during calibration.")
+        return [0.0] * 6
+    avg_exit_times_s = [(t_ms / total_samples_processed) / 1000.0 for t_ms in exit_times_ms]
+    print(f"Calibrated VGG exit times (s/sample): {avg_exit_times_s}")
+    return avg_exit_times_s
+
 # =======================
 # Model Definitions
 # =======================
 
 class QLearningAgent:
+    @staticmethod
+    def _q_table_factory():
+        return np.zeros(2)
+
     def __init__(self, n_exits, epsilon=0.1, alpha=0.1, gamma=0.9):
         self.n_exits = n_exits
         self.epsilon = epsilon
         self.alpha = alpha
         self.gamma = gamma
-        self.q_table = defaultdict(lambda: np.zeros(2))
+        self.q_table = defaultdict(QLearningAgent._q_table_factory)
+
+    def export_q_table(self):
+        # Convert defaultdict to a normal dict for pickling/saving
+        return {k: v.copy() for k, v in self.q_table.items()}
+        self.gamma = gamma
+        self.q_table = defaultdict(QLearningAgent._q_table_factory)
 
     def get_state(self, layer_idx, confidence):
         conf_bin = int(confidence * 10)
@@ -541,7 +595,10 @@ def train_branchy_vgg(model, train_loader, test_loader, num_epochs=100, learning
             'combined_score': best_combined_score,
             'history': history,
         }, weights_path)
-        print(f"\nBest model saved to {weights_path}")
+        # Save Q-table values for RL analysis
+        q_table_path = os.path.splitext(weights_path)[0] + "_q_table.npy"
+        np.save(q_table_path, model.rl_agent.export_q_table())
+        print(f"\nBest model saved to {weights_path}\nQ-table saved to {q_table_path}")
     return model, best_epoch_metrics, history
 
 def evaluate_static_vgg(model, test_loader):
@@ -549,57 +606,94 @@ def evaluate_static_vgg(model, test_loader):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
     correct = 0
-    total = 0
-    inference_times = []
+    total_samples = 0
+    total_time = 0.0
     with torch.no_grad():
         for images, labels in test_loader:
             images, labels = images.to(device), labels.to(device)
+            batch_size = labels.size(0)
+            start_event = None
+            end_event = None
             if device.type == 'cuda':
-                torch.cuda.synchronize()
-            start_time = time.time()
+                start_event = torch.cuda.Event(enable_timing=True)
+                end_event = torch.cuda.Event(enable_timing=True)
+                start_event.record()
+            start_cpu_time = time.time()
             outputs = model(images)
-            if device.type == 'cuda':
+            end_cpu_time = time.time()
+            batch_time = 0.0
+            if device.type == 'cuda' and start_event and end_event:
+                end_event.record()
                 torch.cuda.synchronize()
-            inference_time = time.time() - start_time
-            inference_times.append(inference_time)
+                batch_time = start_event.elapsed_time(end_event) / 1000.0
+            else:
+                batch_time = end_cpu_time - start_cpu_time
+            total_time += batch_time
             _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
+            total_samples += batch_size
             correct += (predicted == labels).sum().item()
-    accuracy = 100 * correct / total
-    avg_inference_time = (sum(inference_times) / len(inference_times)) * 1000
-    return accuracy, avg_inference_time
+    accuracy = 100 * correct / total_samples if total_samples > 0 else 0
+    avg_inference_time_per_sample = (total_time / total_samples) * 1000 if total_samples > 0 else 0
+    return accuracy, avg_inference_time_per_sample
+
+def get_exit_indices(model):
+    """Helper to get all possible exit indices for a Branchy model based on its exit blocks."""
+    # Try to infer the number of exits by checking for exit blocks
+    indices = []
+    for i in range(1, 10):  # Support up to 9 exits
+        if hasattr(model, f"exit{i}"):
+            indices.append(i)
+    # Add the final classifier exit if not already present
+    # Some models may use a separate index for the final classifier
+    # For VGG-5, the final exit is 6
+    if hasattr(model, "classifier") and (len(indices) > 0):
+        final_exit_idx = max(indices) + 1
+        indices.append(final_exit_idx)
+    return indices
 
 def evaluate_branchy_vgg(model, test_loader):
     model.eval()
     model.training_mode = False
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
+    exit_indices = get_exit_indices(model)
     correct = 0
-    total = 0
-    inference_times = []
-    exit_counts = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0}
+    total_samples = 0
+    total_batch_processing_time = 0.0
+    exit_counts = {idx: 0 for idx in exit_indices}
     with torch.no_grad():
         for images, labels in test_loader:
             images, labels = images.to(device), labels.to(device)
             batch_size = labels.size(0)
-            if device.type == 'cuda':
-                torch.cuda.synchronize()
-            start_time = time.time()
+            start_cpu_time = time.time()
             outputs, exit_points = model(images)
-            if device.type == 'cuda':
-                torch.cuda.synchronize()
-            inference_time = time.time() - start_time
-            inference_times.append(inference_time)
+            end_cpu_time = time.time()
+            total_batch_processing_time += (end_cpu_time - start_cpu_time)
             _, predicted = torch.max(outputs.data, 1)
-            total += batch_size
+            total_samples += batch_size
             correct += (predicted == labels).sum().item()
-            for exit_idx in range(1, 7):
+            for exit_idx in exit_indices:
                 count = (exit_points == exit_idx).sum().item()
                 exit_counts[exit_idx] += count
-    accuracy = 100 * correct / total
-    avg_inference_time = (sum(inference_times) / total) * 1000
-    exit_percentages = {k: (v / total) * 100 for k, v in exit_counts.items()}
-    return accuracy, avg_inference_time, exit_percentages
+    accuracy = 100 * correct / total_samples if total_samples > 0 else 0
+    exit_percentages = {k: (v / total_samples) * 100 for k, v in exit_counts.items()} if total_samples > 0 else {k: 0 for k in exit_indices}
+    print("Calibrating BranchyVGG exit times...")
+    calibrated_times = calibrate_exit_times_vgg(model, device, test_loader, n_batches=20)
+    # Defensive: pad or trim calibrated_times to match exit_indices
+    if len(calibrated_times) < len(exit_indices):
+        calibrated_times = list(calibrated_times) + [0.0] * (len(exit_indices) - len(calibrated_times))
+    elif len(calibrated_times) > len(exit_indices):
+        calibrated_times = calibrated_times[:len(exit_indices)]
+    # Weighted average inference time calculation
+    weighted_avg_time_s = 0.0
+    for idx, exit_idx in enumerate(exit_indices):
+        p = exit_percentages.get(exit_idx, 0) / 100.0
+        t = calibrated_times[idx]
+        weighted_avg_time_s += p * t
+    final_inference_time_ms = weighted_avg_time_s * 1000
+    print(f"Weighted Average Inference Time: {final_inference_time_ms:.2f} ms")
+    return accuracy, final_inference_time_ms, exit_percentages
+
 
 # =======================
 # Power Monitoring
@@ -887,12 +981,15 @@ def run_experiments():
         static_model, static_best_metrics, static_history = train_static_vgg(static_vgg, train_loader, test_loader, num_epochs=100, learning_rate=0.001, weights_path=static_weights_path)
     static_training_time = time.time() - static_start_time
     print("\nEvaluating Static VGG...")
-    static_accuracy, static_inference_time = evaluate_static_vgg(static_model, test_loader)
+    # Now returns per-sample time in ms
+    static_accuracy, static_inference_time_per_sample = evaluate_static_vgg(static_model, test_loader)
     print(f"Static VGG Results:")
     print(f"Accuracy: {static_accuracy:.2f}%")
-    print(f"Average Inference Time: {static_inference_time:.2f} ms")
+    print(f"Average Inference Time (per sample): {static_inference_time_per_sample:.2f} ms")
     print("\nMeasuring power consumption for Static VGG...")
     static_power = measure_power_consumption(static_model, test_loader, num_samples=100)
+    static_best_metrics['inference_time'] = static_inference_time_per_sample
+
     print("\nInitializing Branchy VGG...")
     branchy_vgg = BranchyVGG(num_classes=10, in_channels=3)
     branchy_vgg = branchy_vgg.to(device)
@@ -909,24 +1006,28 @@ def run_experiments():
         branchy_model, branchy_best_metrics, branchy_history = train_branchy_vgg(branchy_vgg, train_loader, test_loader, num_epochs=100, learning_rate=0.001, weights_path=branchy_weights_path)
     branchy_training_time = time.time() - branchy_start_time
     print("\nEvaluating Branchy VGG...")
-    final_accuracy, final_inference_time, exit_percentages = evaluate_branchy_vgg(branchy_model, test_loader)
+    # Now returns weighted average per-sample time in ms
+    final_accuracy, final_inference_time_weighted_ms, exit_percentages = evaluate_branchy_vgg(branchy_model, test_loader)
     print(f"Branchy VGG Results:")
     print(f"Accuracy: {final_accuracy:.2f}%")
-    print(f"Average Inference Time: {final_inference_time:.2f} ms")
+    print(f"Average Inference Time (weighted, per sample): {final_inference_time_weighted_ms:.2f} ms")
     print(f"Exit Distribution: {exit_percentages}")
     print("\nMeasuring power consumption for Branchy VGG...")
     branchy_power = measure_power_consumption(branchy_model, test_loader, num_samples=100)
-    speed_improvement = ((static_inference_time - final_inference_time) / static_inference_time) * 100
+    branchy_best_metrics['inference_time'] = final_inference_time_weighted_ms
+    branchy_best_metrics['exit_distribution'] = exit_percentages
+
+    speed_improvement = ((static_inference_time_per_sample - final_inference_time_weighted_ms) / static_inference_time_per_sample) * 100 if static_inference_time_per_sample > 0 else 0
     accuracy_difference = final_accuracy - static_accuracy
-    energy_savings = ((static_power['energy'] - branchy_power['energy']) / static_power['energy'] * 100)
+    energy_savings = ((static_power['energy'] - branchy_power['energy']) / static_power['energy'] * 100) if static_power['energy'] > 0 else 0
     results = {
-        'static': {'accuracy': static_accuracy, 'inference_time': static_inference_time, 'power': static_power, 'training_time': static_training_time, 'best_metrics': static_best_metrics},
-        'branchy': {'accuracy': final_accuracy, 'inference_time': final_inference_time, 'exit_percentages': exit_percentages, 'power': branchy_power, 'training_time': branchy_training_time, 'best_metrics': branchy_best_metrics},
+        'static': {'accuracy': static_accuracy, 'inference_time': static_inference_time_per_sample, 'power': static_power, 'training_time': static_training_time, 'best_metrics': static_best_metrics},
+        'branchy': {'accuracy': final_accuracy, 'inference_time': final_inference_time_weighted_ms, 'exit_percentages': exit_percentages, 'power': branchy_power, 'training_time': branchy_training_time, 'best_metrics': branchy_best_metrics},
         'improvements': {'speed': speed_improvement, 'accuracy': accuracy_difference, 'energy_savings': energy_savings}
     }
     print("\nResults Summary:")
-    print(f"Static VGG - Accuracy: {static_accuracy:.2f}%, Inference Time: {static_inference_time:.2f}ms, Energy: {static_power['energy']:.2f}J")
-    print(f"Branchy VGG - Accuracy: {final_accuracy:.2f}%, Inference Time: {final_inference_time:.2f}ms, Energy: {branchy_power['energy']:.2f}J")
+    print(f"Static VGG - Accuracy: {static_accuracy:.2f}%, Inference Time (per sample): {static_inference_time_per_sample:.2f}ms, Energy: {static_power.get('energy', 0):.2f}J")
+    print(f"Branchy VGG - Accuracy: {final_accuracy:.2f}%, Inference Time (weighted, per sample): {final_inference_time_weighted_ms:.2f}ms, Energy: {branchy_power.get('energy', 0):.2f}J")
     print(f"Speed Improvement: {speed_improvement:.1f}%")
     print(f"Accuracy Difference: {accuracy_difference:+.2f}%")
     print(f"Energy Savings: {energy_savings:.1f}%")
