@@ -11,7 +11,6 @@ import os
 from collections import defaultdict
 from torch.utils.data import DataLoader
 from torchvision.datasets import MNIST, CIFAR10
-
 import pynvml
 import pandas as pd
 import threading
