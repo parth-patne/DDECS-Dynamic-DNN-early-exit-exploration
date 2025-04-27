@@ -35,12 +35,20 @@ from torch.cuda.amp import GradScaler, autocast
 # Q-Learning Agent
 # -------------------------------------------------------
 class QLearningAgent:
+    @staticmethod
+    def _q_table_factory():
+        return np.zeros(2)
+
     def __init__(self, n_exits, epsilon=0.1, alpha=0.1, gamma=0.9):
         self.n_exits = n_exits
         self.epsilon = epsilon
         self.alpha = alpha
         self.gamma = gamma
-        self.q_table = defaultdict(lambda: np.zeros(2))
+        self.q_table = defaultdict(QLearningAgent._q_table_factory)
+
+    def export_q_table(self):
+        # Convert defaultdict to a normal dict for pickling/saving
+        return {k: v.copy() for k, v in self.q_table.items()}
 
     def get_state(self, layer_idx, confidence):
         conf_bin = int(confidence * 10)
@@ -434,10 +442,12 @@ def evaluate_static_resnet(model, test_loader):
     device = next(model.parameters()).device
     correct = 0
     total = 0
-    inference_times = []
+    total_inference_time = 0.0
+    total_samples = 0
     with torch.no_grad():
         for images, labels in test_loader:
             images, labels = images.to(device), labels.to(device)
+            batch_size = labels.size(0)
             if device.type == 'cuda':
                 torch.cuda.synchronize()
             start_time = time.time()
@@ -445,22 +455,83 @@ def evaluate_static_resnet(model, test_loader):
             if device.type == 'cuda':
                 torch.cuda.synchronize()
             inference_time = time.time() - start_time
-            inference_times.append(inference_time)
+            total_inference_time += inference_time
+            total_samples += batch_size
             _, predicted = torch.max(outputs.data,1)
-            total += labels.size(0)
+            total += batch_size
             correct += (predicted == labels).sum().item()
     accuracy = 100 * correct / total
-    avg_inference_time = (sum(inference_times)/len(inference_times))*1000
+    avg_inference_time = (total_inference_time / total_samples) * 1000  # ms per sample
     return accuracy, avg_inference_time
 
-def evaluate_branchy_resnet(model, test_loader):
+def calibrate_exit_times_resnet(model, device, loader, n_batches=10):
+    """
+    Measure cumulative per-exit times (seconds/sample) for BranchyResNet18 via CUDA events.
+    Returns a list of average times for each exit (Exit 1, Exit 2, Exit 3, Exit 4).
+    """
+    import torch
+    if not torch.cuda.is_available():
+        print("Warning: CUDA not available, cannot perform precise exit time calibration. Returning zeros.")
+        return [0.0] * 4
+    model.training_mode = False
+    model.eval()
+    model.to(device)
+    n_batches = min(n_batches, len(loader))
+    if n_batches == 0:
+        print("Warning: Loader is empty, cannot calibrate exit times.")
+        return [0.0] * 4
+    exit_times_ms = [0.0] * 4
+    total_samples_processed = 0
+    batch_count = 0
+    with torch.no_grad():
+        for images, _ in loader:
+            if batch_count >= n_batches:
+                break
+            images = images.to(device)
+            batch_size = images.size(0)
+            start_event = torch.cuda.Event(enable_timing=True)
+            exit_events = [torch.cuda.Event(enable_timing=True) for _ in range(4)]
+            x_current = images
+            # Exit 1
+            start_event.record()
+            x1 = model.layer1(x_current)
+            out1 = model.exit1(x1)
+            exit_events[0].record()
+            # Exit 2
+            x2 = model.layer2(x1)
+            out2 = model.exit2(x2)
+            exit_events[1].record()
+            # Exit 3
+            x3 = model.layer3(x2)
+            out3 = model.exit3(x3)
+            exit_events[2].record()
+            # Exit 4 (final)
+            x4 = model.layer4(x3)
+            x_final = model.avgpool(x4)
+            x_final = torch.flatten(x_final, 1)
+            out_final = model.fc(x_final)
+            exit_events[3].record()
+            torch.cuda.synchronize()
+            for i in range(4):
+                exit_times_ms[i] += start_event.elapsed_time(exit_events[i])
+            total_samples_processed += batch_size
+            batch_count += 1
+    if total_samples_processed == 0:
+        print("Warning: No samples processed during calibration.")
+        return [0.0] * 4
+    avg_exit_times_s = [(t_ms / total_samples_processed) / 1000.0 for t_ms in exit_times_ms]
+    print(f"Calibrated ResNet exit times (s/sample): {avg_exit_times_s}")
+    return avg_exit_times_s
+
+def evaluate_branchy_resnet(model, test_loader, calibrated_times=None):
     model.eval()
     model.training_mode = False
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = model.to(device)
     correct = 0
     total = 0
-    inference_times = []
     exit_counts = {1:0, 3:0, 4:0}
+    inference_times = []
     with torch.no_grad():
         for images, labels in test_loader:
             images, labels = images.to(device), labels.to(device)
@@ -480,9 +551,25 @@ def evaluate_branchy_resnet(model, test_loader):
                 count = (exit_points == i).sum().item()
                 exit_counts[i] += count
     accuracy = 100 * correct / total
-    avg_inference_time = (sum(inference_times)/total)*1000
     exit_percentages = {k:(v/total)*100 for k,v in exit_counts.items()}
-    return accuracy, avg_inference_time, exit_percentages
+    # Calibrate exit times if not provided
+    if calibrated_times is None:
+        loader_for_calib = test_loader
+        calibrated_times = calibrate_exit_times_resnet(model, device, loader_for_calib, n_batches=10)
+    # Ensure correct length
+    if len(calibrated_times) < 3:
+        calibrated_times = list(calibrated_times) + [0.0] * (3 - len(calibrated_times))
+    elif len(calibrated_times) > 3:
+        calibrated_times = calibrated_times[:3]
+    # Weighted average inference time
+    weighted_avg_time_s = 0.0
+    for idx, exit_idx in enumerate([1,3,4]):
+        p = exit_percentages.get(exit_idx, 0) / 100.0
+        t = calibrated_times[idx]
+        weighted_avg_time_s += p * t
+    final_inference_time_ms = weighted_avg_time_s * 1000
+    print(f"Weighted Average Inference Time: {final_inference_time_ms:.2f} ms")
+    return accuracy, final_inference_time_ms, exit_percentages
 
 # -------------------------------------------------------
 # Power Monitoring
@@ -814,10 +901,12 @@ def run_experiments():
             num_epochs=100,
             learning_rate=0.001
         )
-        torch.save({
-            'state_dict': branchy_resnet.state_dict(),
-            'accuracy': evaluate_branchy_resnet(branchy_resnet, test_loader)[0]
-        }, branchy_weights_path)
+        # Save best model and Q-table after training
+        torch.save({'state_dict': branchy_resnet.state_dict(),
+                    'accuracy': evaluate_branchy_resnet(branchy_resnet, test_loader)[0]}, branchy_weights_path)
+        q_table_path = os.path.splitext(branchy_weights_path)[0] + "_q_table.npy"
+        np.save(q_table_path, branchy_resnet.rl_agent.export_q_table())
+        print(f"\nBest model saved to {branchy_weights_path}\nQ-table saved to {q_table_path}")
 
     print("\nEvaluating Branchy ResNet18...")
     final_accuracy, final_inference_time, exit_percentages = evaluate_branchy_resnet(branchy_resnet, test_loader)
