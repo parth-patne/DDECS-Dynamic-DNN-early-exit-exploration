@@ -33,12 +33,20 @@ from torch.cuda.amp import GradScaler, autocast
 # =======================
 
 class QLearningAgent:
+    @staticmethod
+    def _q_table_factory():
+        return np.zeros(2)
+
     def __init__(self, n_exits, epsilon=0.1, alpha=0.1, gamma=0.9):
         self.n_exits = n_exits
         self.epsilon = epsilon
         self.alpha = alpha
         self.gamma = gamma
-        self.q_table = defaultdict(lambda: np.zeros(2))
+        self.q_table = defaultdict(QLearningAgent._q_table_factory)
+
+    def export_q_table(self):
+        # Convert defaultdict to a normal dict for pickling/saving
+        return {k: v.copy() for k, v in self.q_table.items()}
 
     def get_state(self, layer_idx, confidence):
         conf_bin = int(confidence * 10)
@@ -550,7 +558,10 @@ def train_branchy_vgg(model, train_loader, test_loader, num_epochs=100, learning
             'combined_score': best_combined_score,
             'history': history,
         }, weights_path)
-        print(f"\nBest model saved to {weights_path}")
+        # Save Q-table values for RL analysis
+        q_table_path = os.path.splitext(weights_path)[0] + "_q_table.npy"
+        np.save(q_table_path, model.rl_agent.export_q_table())
+        print(f"\nBest model saved to {weights_path}\nQ-table saved to {q_table_path}")
     return model, best_epoch_metrics, history
 
 def evaluate_static_vgg(model, test_loader):
@@ -578,6 +589,17 @@ def evaluate_static_vgg(model, test_loader):
     avg_inference_time = (sum(inference_times) / len(inference_times)) * 1000
     return accuracy, avg_inference_time
 
+def get_exit_indices(model):
+    """Helper to get all possible exit indices for a Branchy model based on its exit blocks."""
+    indices = []
+    for i in range(1, 10):
+        if hasattr(model, f"exit{i}"):
+            indices.append(i)
+    if hasattr(model, "classifier") and (len(indices) > 0):
+        final_exit_idx = max(indices) + 1
+        indices.append(final_exit_idx)
+    return indices
+
 def evaluate_branchy_vgg(model, test_loader):
     model.eval()
     model.training_mode = False
@@ -586,7 +608,10 @@ def evaluate_branchy_vgg(model, test_loader):
     correct = 0
     total = 0
     inference_times = []
-    exit_counts = {1: 0, 2: 0, 3: 0, 4: 0}  # 3 early exits + final classifier
+    exit_counts = {}
+    exit_indices = get_exit_indices(model)
+    for idx in exit_indices:
+        exit_counts[idx] = 0
     with torch.no_grad():
         for images, labels in test_loader:
             images, labels = images.to(device), labels.to(device)
@@ -602,13 +627,25 @@ def evaluate_branchy_vgg(model, test_loader):
             _, predicted = torch.max(outputs.data, 1)
             total += batch_size
             correct += (predicted == labels).sum().item()
-            for exit_idx in range(1, 5):
+            for exit_idx in exit_indices:
                 count = (exit_points == exit_idx).sum().item()
                 exit_counts[exit_idx] += count
-    accuracy = 100 * correct / total
-    avg_inference_time = (sum(inference_times) / total) * 1000
-    exit_percentages = {k: (v / total) * 100 for k, v in exit_counts.items()}
-    return accuracy, avg_inference_time, exit_percentages
+    accuracy = 100 * correct / total if total > 0 else 0
+    exit_percentages = {k: (v / total) * 100 for k, v in exit_counts.items()} if total > 0 else {k: 0 for k in exit_indices}
+    print("Calibrating BranchyVGG exit times...")
+    calibrated_times = calibrate_exit_times_vgg(model, device, test_loader, n_batches=20)
+    if len(calibrated_times) < len(exit_indices):
+        calibrated_times = list(calibrated_times) + [0.0] * (len(exit_indices) - len(calibrated_times))
+    elif len(calibrated_times) > len(exit_indices):
+        calibrated_times = calibrated_times[:len(exit_indices)]
+    weighted_avg_time_s = 0.0
+    for idx, exit_idx in enumerate(exit_indices):
+        p = exit_percentages.get(exit_idx, 0) / 100.0
+        t = calibrated_times[idx]
+        weighted_avg_time_s += p * t
+    final_inference_time_ms = weighted_avg_time_s * 1000
+    print(f"Weighted Average Inference Time: {final_inference_time_ms:.2f} ms")
+    return accuracy, final_inference_time_ms, exit_percentages
 
 # =======================
 # Power Monitoring
@@ -637,9 +674,23 @@ class PowerMonitor:
                     power = pynvml.nvmlDeviceGetPowerUsage(self.handle) / 1000.0
                     self.power_measurements.put((time.time(), power))
                     time.sleep(0.005)
-                except pynvml.NVMLError as error:
-                    print(f"NVML Error: {error}")
-                    break
+                except pynvml.NVMLError:
+                    pass
+        self.monitor_thread = threading.Thread(target=monitor_power)
+        self.monitor_thread.start()
+
+    def stop_monitoring(self):
+        self.is_monitoring = False
+        if hasattr(self, 'monitor_thread'):
+            self.monitor_thread.join()
+
+    def get_power_measurements(self):
+        measurements = []
+        while not self.power_measurements.empty():
+            measurements.append(self.power_measurements.get())
+        return measurements
+
+
         self.monitor_thread = threading.Thread(target=monitor_power)
         self.monitor_thread.start()
 
