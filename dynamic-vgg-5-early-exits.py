@@ -1,7 +1,3 @@
-"""
-This code implements a BranchyVGG model with 5 early exits, including Q-learning-based dynamic exits,
-training on MNIST and CIFAR-10, evaluation, power monitoring, and visualization of results.
-"""
 
 import torch
 import torch.nn as nn
@@ -13,7 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import random
 import os
-import itertools  # for calibrate_exit_times_vgg batching
+import itertools  
 
 from collections import defaultdict
 from torch.utils.data import DataLoader
@@ -29,9 +25,7 @@ import queue
 
 from torch.cuda.amp import GradScaler, autocast
 
-# --- Accurate CUDA timing for BranchyVGG exits ---
 def calibrate_exit_times_vgg(model, device, loader, n_batches=10):
-    """Measure cumulative per-exit times (s) for BranchyVGG via CUDA events."""
     if not torch.cuda.is_available():
         print("Warning: CUDA not available, cannot perform precise exit time calibration. Returning zeros.")
         return [0.0] * 6
@@ -72,10 +66,6 @@ def calibrate_exit_times_vgg(model, device, loader, n_batches=10):
     print(f"Calibrated VGG exit times (s/sample): {avg_exit_times_s}")
     return avg_exit_times_s
 
-# =======================
-# Model Definitions
-# =======================
-
 class QLearningAgent:
     @staticmethod
     def _q_table_factory():
@@ -89,7 +79,6 @@ class QLearningAgent:
         self.q_table = defaultdict(QLearningAgent._q_table_factory)
 
     def export_q_table(self):
-        # Convert defaultdict to a normal dict for pickling/saving
         return {k: v.copy() for k, v in self.q_table.items()}
         self.gamma = gamma
         self.q_table = defaultdict(QLearningAgent._q_table_factory)
@@ -393,10 +382,7 @@ class BranchyVGG(nn.Module):
                         self.rl_agent.update(state, action, reward, next_state)
         return total_loss
 
-# =======================
 # Data Loading
-# =======================
-
 def load_datasets(batch_size=32):
     train_transform = transforms.Compose([
         transforms.RandomHorizontalFlip(),
@@ -413,10 +399,7 @@ def load_datasets(batch_size=32):
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
     return train_loader, test_loader
 
-# =======================
 # Training & Evaluation Functions
-# =======================
-
 def train_static_vgg(model, train_loader, test_loader=None, num_epochs=100, learning_rate=0.001, weights_path=None):
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
@@ -595,7 +578,7 @@ def train_branchy_vgg(model, train_loader, test_loader, num_epochs=100, learning
             'combined_score': best_combined_score,
             'history': history,
         }, weights_path)
-        # Save Q-table values for RL analysis
+
         q_table_path = os.path.splitext(weights_path)[0] + "_q_table.npy"
         np.save(q_table_path, model.rl_agent.export_q_table())
         print(f"\nBest model saved to {weights_path}\nQ-table saved to {q_table_path}")
@@ -638,14 +621,11 @@ def evaluate_static_vgg(model, test_loader):
 
 def get_exit_indices(model):
     """Helper to get all possible exit indices for a Branchy model based on its exit blocks."""
-    # Try to infer the number of exits by checking for exit blocks
     indices = []
-    for i in range(1, 10):  # Support up to 9 exits
+    for i in range(1, 10):  
         if hasattr(model, f"exit{i}"):
             indices.append(i)
-    # Add the final classifier exit if not already present
-    # Some models may use a separate index for the final classifier
-    # For VGG-5, the final exit is 6
+
     if hasattr(model, "classifier") and (len(indices) > 0):
         final_exit_idx = max(indices) + 1
         indices.append(final_exit_idx)
@@ -679,12 +659,12 @@ def evaluate_branchy_vgg(model, test_loader):
     exit_percentages = {k: (v / total_samples) * 100 for k, v in exit_counts.items()} if total_samples > 0 else {k: 0 for k in exit_indices}
     print("Calibrating BranchyVGG exit times...")
     calibrated_times = calibrate_exit_times_vgg(model, device, test_loader, n_batches=20)
-    # Defensive: pad or trim calibrated_times to match exit_indices
+
     if len(calibrated_times) < len(exit_indices):
         calibrated_times = list(calibrated_times) + [0.0] * (len(exit_indices) - len(calibrated_times))
     elif len(calibrated_times) > len(exit_indices):
         calibrated_times = calibrated_times[:len(exit_indices)]
-    # Weighted average inference time calculation
+
     weighted_avg_time_s = 0.0
     for idx, exit_idx in enumerate(exit_indices):
         p = exit_percentages.get(exit_idx, 0) / 100.0
@@ -695,10 +675,7 @@ def evaluate_branchy_vgg(model, test_loader):
     return accuracy, final_inference_time_ms, exit_percentages
 
 
-# =======================
 # Power Monitoring
-# =======================
-
 class PowerMonitor:
     def __init__(self):
         try:
@@ -953,10 +930,7 @@ def plot_confusion_matrix(model, test_loader, is_branchy=False, dataset_name='ci
     plt.savefig(os.path.join(output_dir, f'{dataset_name.lower()}_{model_type}_confusion_matrix.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
-# =======================
 # Experiment Runner
-# =======================
-
 def run_experiments():
     print("\nRunning experiments on CIFAR-10...")
     train_loader, test_loader = load_datasets(batch_size=128)
@@ -1006,7 +980,6 @@ def run_experiments():
         branchy_model, branchy_best_metrics, branchy_history = train_branchy_vgg(branchy_vgg, train_loader, test_loader, num_epochs=100, learning_rate=0.001, weights_path=branchy_weights_path)
     branchy_training_time = time.time() - branchy_start_time
     print("\nEvaluating Branchy VGG...")
-    # Now returns weighted average per-sample time in ms
     final_accuracy, final_inference_time_weighted_ms, exit_percentages = evaluate_branchy_vgg(branchy_model, test_loader)
     print(f"Branchy VGG Results:")
     print(f"Accuracy: {final_accuracy:.2f}%")

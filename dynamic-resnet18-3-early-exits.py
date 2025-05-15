@@ -23,9 +23,6 @@ import queue
 
 from torch.cuda.amp import GradScaler, autocast
 
-# -------------------------------------------------------
-# Q-Learning Agent
-# -------------------------------------------------------
 class QLearningAgent:
     @staticmethod
     def _q_table_factory():
@@ -39,7 +36,6 @@ class QLearningAgent:
         self.q_table = defaultdict(QLearningAgent._q_table_factory)
 
     def export_q_table(self):
-        # Convert defaultdict to a normal dict for pickling/saving
         return {k: v.copy() for k, v in self.q_table.items()}
 
     def get_state(self, layer_idx, confidence):
@@ -57,9 +53,6 @@ class QLearningAgent:
         td_error = td_target - self.q_table[state][action]
         self.q_table[state][action] += self.alpha * td_error
 
-# -------------------------------------------------------
-# Early Exit Block
-# -------------------------------------------------------
 class EarlyExitBlock(nn.Module):
     def __init__(self, in_channels, num_classes):
         super(EarlyExitBlock, self).__init__()
@@ -75,9 +68,6 @@ class EarlyExitBlock(nn.Module):
     def forward(self, x):
         return self.head(x)
 
-# -------------------------------------------------------
-# ResNet-18 Building Blocks
-# -------------------------------------------------------
 class BasicBlock(nn.Module):
     expansion = 1
     def __init__(self, in_planes, planes, stride=1):
@@ -101,9 +91,6 @@ class BasicBlock(nn.Module):
         out = self.relu(out)
         return out
 
-# -------------------------------------------------------
-# Static ResNet-18
-# -------------------------------------------------------
 class StaticResNet18(nn.Module):
     def __init__(self, num_classes=10, in_channels=3):
         super(StaticResNet18, self).__init__()
@@ -148,10 +135,6 @@ class StaticResNet18(nn.Module):
         x = torch.flatten(x,1)
         x = self.fc(x)
         return x
-
-# -------------------------------------------------------
-# Branchy ResNet-18 with 4 Early Exits
-# -------------------------------------------------------
 class BranchyResNet18(nn.Module):
     def __init__(self, num_classes=10, in_channels=3):
         super(BranchyResNet18, self).__init__()
@@ -284,9 +267,6 @@ class BranchyResNet18(nn.Module):
                         self.rl_agent.update(state, action, reward, next_state)
         return total_loss
 
-# -------------------------------------------------------
-# Data Loading
-# -------------------------------------------------------
 def load_datasets(batch_size=128):
     train_transform = transforms.Compose([
         transforms.RandomHorizontalFlip(),
@@ -303,9 +283,6 @@ def load_datasets(batch_size=128):
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
     return train_loader, test_loader
 
-# -------------------------------------------------------
-# Training & Evaluation Functions
-# -------------------------------------------------------
 def train_static_resnet(model, train_loader, test_loader=None, num_epochs=100, learning_rate=0.001, weights_path=None):
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
@@ -343,7 +320,6 @@ def train_static_resnet(model, train_loader, test_loader=None, num_epochs=100, l
         avg_loss = running_loss / len(train_loader)
         scheduler.step()
         if test_loader is not None:
-            # Unpack all four returned values, using only the first (accuracy)
             accuracy, _, _, _ = evaluate_static_resnet(model, test_loader)
             print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.4f}, Accuracy: {accuracy:.2f}%')
             if accuracy > best_accuracy:
@@ -543,9 +519,6 @@ def evaluate_branchy_resnet(model, test_loader, calibrated_times=None):
     accuracy = 100 * correct / total
     return accuracy, final_inference_time_ms, exit_percentages
 
-# -------------------------------------------------------
-# Power Monitoring
-# -------------------------------------------------------
 class PowerMonitor:
     def __init__(self):
         try:
@@ -623,9 +596,6 @@ def measure_power_consumption(model, test_loader, num_samples=100, device='cuda'
             results['inference_time'].append(inference_time / batch_size)
     return {k: np.mean(v) if v else 0 for k,v in results.items()}
 
-# -------------------------------------------------------
-# Visualization & Analysis Functions
-# -------------------------------------------------------
 def create_output_directory(dataset_name):
     output_dir = f'plots_{dataset_name.lower()}'
     if not os.path.exists(output_dir):
@@ -813,9 +783,6 @@ def plot_confusion_matrix(model, test_loader, is_branchy=False, dataset_name='ci
     plt.savefig(os.path.join(output_dir, f'{dataset_name.lower()}_{model_type}_confusion_matrix.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
-# -------------------------------------------------------
-# Runner
-# -------------------------------------------------------
 def run_experiments():
     dataset_name = 'cifar10'
     print(f"\nRunning experiments on {dataset_name.upper()}...")
@@ -873,7 +840,6 @@ def run_experiments():
             'state_dict': branchy_resnet.state_dict(),
             'accuracy': evaluate_branchy_resnet(branchy_resnet, test_loader)[0]
         }, branchy_weights_path)
-        # Save Q-table values for RL analysis
         q_table_path = os.path.splitext(branchy_weights_path)[0] + "_q_table.npy"
         np.save(q_table_path, branchy_resnet.rl_agent.export_q_table())
         print(f"\nBest model saved to {branchy_weights_path}\nQ-table saved to {q_table_path}")

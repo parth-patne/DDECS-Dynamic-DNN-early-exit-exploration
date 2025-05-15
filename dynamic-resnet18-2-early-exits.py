@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """dynamic-resnet18-early-exits.py
 This code implements a BranchyResNet18 model with only two early exits:
 - Exit 1 after layer1
@@ -31,9 +30,6 @@ import queue
 
 from torch.cuda.amp import GradScaler, autocast
 
-# -------------------------------------------------------
-# Q-Learning Agent
-# -------------------------------------------------------
 class QLearningAgent:
     @staticmethod
     def _q_table_factory():
@@ -65,9 +61,6 @@ class QLearningAgent:
         td_error = td_target - self.q_table[state][action]
         self.q_table[state][action] += self.alpha * td_error
 
-# -------------------------------------------------------
-# Early Exit Block
-# -------------------------------------------------------
 class EarlyExitBlock(nn.Module):
     def __init__(self, in_channels, num_classes):
         super(EarlyExitBlock, self).__init__()
@@ -83,9 +76,6 @@ class EarlyExitBlock(nn.Module):
     def forward(self, x):
         return self.head(x)
 
-# -------------------------------------------------------
-# ResNet-18 Building Blocks
-# -------------------------------------------------------
 class BasicBlock(nn.Module):
     expansion = 1
     def __init__(self, in_planes, planes, stride=1):
@@ -109,9 +99,6 @@ class BasicBlock(nn.Module):
         out = self.relu(out)
         return out
 
-# -------------------------------------------------------
-# Static ResNet-18
-# -------------------------------------------------------
 class StaticResNet18(nn.Module):
     def __init__(self, num_classes=10, in_channels=3):
         super(StaticResNet18, self).__init__()
@@ -157,25 +144,22 @@ class StaticResNet18(nn.Module):
         x = self.fc(x)
         return x
 
-# -------------------------------------------------------
-# Branchy ResNet-18 with two early exits (Exit 1 after layer1 and Exit 3 after layer3)
-# -------------------------------------------------------
 class BranchyResNet18(nn.Module):
     def __init__(self, num_classes=10, in_channels=3):
         super(BranchyResNet18, self).__init__()
         self.num_classes = num_classes
         self.training_mode = True
-        self.exit_loss_weights = [0.10, 0.10, 0.80]  # For Exit 1, Exit 3, Final (Exit 4)
+        self.exit_loss_weights = [0.10, 0.10, 0.80]
         self.rl_agent = QLearningAgent(n_exits=2)
         self.in_planes = 64
         self.conv1 = nn.Conv2d(in_channels, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
         self.layer1 = self._make_layer(64, 2, stride=1)
-        self.exit1 = EarlyExitBlock(64, num_classes)  # Exit 1
-        self.layer2 = self._make_layer(128, 2, stride=2)  # No exit here
+        self.exit1 = EarlyExitBlock(64, num_classes)
+        self.layer2 = self._make_layer(128, 2, stride=2)
         self.layer3 = self._make_layer(256, 2, stride=2)
-        self.exit3 = EarlyExitBlock(256, num_classes)  # Exit 3
+        self.exit3 = EarlyExitBlock(256, num_classes)
         self.layer4 = self._make_layer(512, 2, stride=2)
         self.avgpool = nn.AdaptiveAvgPool2d((1,1))
         self.fc = nn.Linear(512, num_classes)
@@ -312,9 +296,6 @@ class BranchyResNet18(nn.Module):
                 self.rl_agent.update(state, action, reward, next_state)
         return total_loss
 
-# -------------------------------------------------------
-# Data Loading
-# -------------------------------------------------------
 def load_datasets(batch_size=128):
     train_transform = transforms.Compose([
         transforms.RandomHorizontalFlip(),
@@ -333,9 +314,6 @@ def load_datasets(batch_size=128):
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
     return train_loader, test_loader
 
-# -------------------------------------------------------
-# Training & Evaluation Functions
-# -------------------------------------------------------
 def train_static_resnet(model, train_loader, test_loader=None, num_epochs=100, learning_rate=0.001, weights_path=None):
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
@@ -461,7 +439,7 @@ def evaluate_static_resnet(model, test_loader):
             total += batch_size
             correct += (predicted == labels).sum().item()
     accuracy = 100 * correct / total
-    avg_inference_time = (total_inference_time / total_samples) * 1000  # ms per sample
+    avg_inference_time = (total_inference_time / total_samples) * 1000
     return accuracy, avg_inference_time
 
 def calibrate_exit_times_resnet(model, device, loader, n_batches=10):
@@ -552,16 +530,13 @@ def evaluate_branchy_resnet(model, test_loader, calibrated_times=None):
                 exit_counts[i] += count
     accuracy = 100 * correct / total
     exit_percentages = {k:(v/total)*100 for k,v in exit_counts.items()}
-    # Calibrate exit times if not provided
     if calibrated_times is None:
         loader_for_calib = test_loader
         calibrated_times = calibrate_exit_times_resnet(model, device, loader_for_calib, n_batches=10)
-    # Ensure correct length
     if len(calibrated_times) < 3:
         calibrated_times = list(calibrated_times) + [0.0] * (3 - len(calibrated_times))
     elif len(calibrated_times) > 3:
         calibrated_times = calibrated_times[:3]
-    # Weighted average inference time
     weighted_avg_time_s = 0.0
     for idx, exit_idx in enumerate([1,3,4]):
         p = exit_percentages.get(exit_idx, 0) / 100.0
@@ -571,9 +546,6 @@ def evaluate_branchy_resnet(model, test_loader, calibrated_times=None):
     print(f"Weighted Average Inference Time: {final_inference_time_ms:.2f} ms")
     return accuracy, final_inference_time_ms, exit_percentages
 
-# -------------------------------------------------------
-# Power Monitoring
-# -------------------------------------------------------
 class PowerMonitor:
     def __init__(self):
         try:
@@ -651,9 +623,6 @@ def measure_power_consumption(model, test_loader, num_samples=100, device='cuda'
             results['inference_time'].append(inference_time / batch_size)
     return {k: np.mean(v) if v else 0 for k,v in results.items()}
 
-# -------------------------------------------------------
-# Visualization & Analysis Functions
-# -------------------------------------------------------
 def create_output_directory(dataset_name):
     output_dir = f'plots_{dataset_name.lower()}'
     if not os.path.exists(output_dir):
@@ -845,9 +814,6 @@ def plot_confusion_matrix(model, test_loader, is_branchy=False, dataset_name='ci
     plt.savefig(os.path.join(output_dir, f'{dataset_name.lower()}_{model_type}_confusion_matrix.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
-# -------------------------------------------------------
-# Experiment Runner
-# -------------------------------------------------------
 def run_experiments():
     dataset_name = 'cifar10'
     print(f"\nRunning experiments on {dataset_name.upper()}...")

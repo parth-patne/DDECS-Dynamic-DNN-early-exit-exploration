@@ -23,8 +23,6 @@ import queue
 from torch.cuda.amp import GradScaler, autocast
 
 
-
-
 class QLearningAgent:
     @staticmethod
     def _q_table_factory():
@@ -281,9 +279,6 @@ class BranchyAlexNet(nn.Module):
                         self.rl_agent.update(state, action, reward, next_state)
         return total_loss
 
-# -------------------------------------------------------
-# Data Loading
-# -------------------------------------------------------
 def load_datasets(dataset_name='cifar10', batch_size=32):
     if dataset_name.lower() == 'mnist':
         transform = transforms.Compose([
@@ -310,9 +305,6 @@ def load_datasets(dataset_name='cifar10', batch_size=32):
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
     return train_loader, test_loader
 
-# -------------------------------------------------------
-# Training & Evaluation Functions
-# -------------------------------------------------------
 def train_static_alexnet(model, train_loader, test_loader=None, num_epochs=100, learning_rate=0.001, weights_path=None):
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
@@ -813,9 +805,6 @@ def plot_confusion_matrix(model, test_loader, is_branchy=False, dataset_name='ci
     plt.savefig(os.path.join(output_dir, f'{dataset_name.lower()}_{model_type}_confusion_matrix.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
-# -------------------------------------------------------
-# Analyze Exit Distribution Function
-# -------------------------------------------------------
 def analyze_exit_distribution(model, test_loader, dataset_name):
     model.eval()
     model.training_mode = False
@@ -843,9 +832,6 @@ def analyze_exit_distribution(model, test_loader, dataset_name):
     exit_distribution = {k: (v/total_samples)*100 for k, v in exit_counts.items()}
     return exit_distribution, class_distributions
 
-# -------------------------------------------------------
-# Experiment Runner
-# -------------------------------------------------------
 def run_experiments(dataset_name):
     print(f"\nRunning experiments on {dataset_name.upper()}...")
     train_loader, test_loader = load_datasets(dataset_name, batch_size=32)
@@ -895,7 +881,6 @@ def run_experiments(dataset_name):
             'state_dict': branchy_alexnet.state_dict(),
             'accuracy': evaluate_branchy_alexnet(branchy_alexnet, test_loader)[0]
         }, branchy_weights_path)
-        # Save Q-table values for RL analysis
         q_table_path = os.path.splitext(branchy_weights_path)[0] + "_q_table.npy"
         np.save(q_table_path, branchy_alexnet.rl_agent.export_q_table())
         print(f"\nBest model saved to {branchy_weights_path}\nQ-table saved to {q_table_path}")

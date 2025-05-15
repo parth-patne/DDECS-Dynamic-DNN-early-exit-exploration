@@ -11,12 +11,14 @@ import os
 from collections import defaultdict
 from torch.utils.data import DataLoader
 from torchvision.datasets import MNIST, CIFAR10
+
 import pynvml
 import pandas as pd
 import threading
 import queue
 
 from torch.amp import GradScaler, autocast
+
 
 def calibrate_exit_times_alexnet(model, device, loader, n_batches=10):
 
@@ -180,7 +182,6 @@ class BranchyAlexNet(nn.Module):
         self.exit_loss_weights = [0.15, 0.15, 0.70]
         self.rl_agent = QLearningAgent(n_exits=2)
 
-        # Early Exit 1: after first conv block
         self.features1 = nn.Sequential(
             nn.Conv2d(in_channels, 64, kernel_size=3, stride=1, padding=1),
             nn.ReLU(inplace=True),
@@ -188,7 +189,6 @@ class BranchyAlexNet(nn.Module):
         )
         self.exit1 = EarlyExitBlock(64, num_classes)
 
-        # (Exit 2)
         self.features2 = nn.Sequential(
             nn.Conv2d(64, 192, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
@@ -313,7 +313,6 @@ class BranchyAlexNet(nn.Module):
                         self.rl_agent.update(state, action, reward, next_state)
         return total_loss
 
-# Data Loading
 class RepeatChannelsTransform:
     def __call__(self, x):
         return x.repeat(3, 1, 1)
@@ -344,7 +343,6 @@ def load_datasets(dataset_name='cifar10', batch_size=32):
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
     return train_loader, test_loader
 
-# Training Functions
 def train_static_alexnet(model, train_loader, test_loader=None, num_epochs=100, learning_rate=0.001, weights_path=None):
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
@@ -432,7 +430,6 @@ def train_branchy_alexnet(model, train_loader, test_loader, num_epochs=100, lear
         model.load_state_dict(best_model_state)
     return model
 
-# Evaluation Functions
 def evaluate_static_alexnet(model, test_loader):
     model.eval()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -459,7 +456,6 @@ def evaluate_static_alexnet(model, test_loader):
     return accuracy, avg_inference_time
 
 def get_exit_indices(model):
-    """Helper to get all possible exit indices for a Branchy model based on its exit blocks."""
     indices = []
     for i in range(1, 10):
         if hasattr(model, f"exit{i}"):
@@ -516,7 +512,6 @@ def evaluate_branchy_alexnet(model, test_loader):
     print(f"Weighted Average Inference Time: {final_inference_time_ms:.2f} ms")
     return accuracy, final_inference_time_ms, exit_percentages
 
-# Power Monitoring
 class PowerMonitor:
     def __init__(self):
         try:
@@ -591,7 +586,6 @@ def measure_power_consumption(model, test_loader, num_samples=100, device='cuda'
             results['inference_time'].append(inference_time / batch_size)
     return {k: np.mean(v) if v else 0 for k, v in results.items()}
 
-# Visualization & Analysis Functions
 def create_output_directory(dataset_name):
     output_dir = f'plots_{dataset_name.lower()}'
     if not os.path.exists(output_dir):
@@ -711,7 +705,7 @@ def analyze_exit_distribution(model, test_loader, dataset_name='mnist'):
     device = next(model.parameters()).device
     model.eval()
     model.training_mode = False
-    exit_counts = {1: 0, 2: 0, 3: 0}  # For 2 early exits + final
+    exit_counts = {1: 0, 2: 0, 3: 0}
     class_distributions = {1: defaultdict(int), 2: defaultdict(int), 3: defaultdict(int)}
     total_samples = 0
     with torch.no_grad():
@@ -778,7 +772,6 @@ def run_experiments(dataset_name):
             'state_dict': branchy_alexnet.state_dict(),
             'accuracy': evaluate_branchy_alexnet(branchy_alexnet, test_loader)[0]
         }, branchy_weights_path)
-        # Save Q-table values for RL analysis
         q_table_path = os.path.splitext(branchy_weights_path)[0] + "_q_table.npy"
         np.save(q_table_path, branchy_alexnet.rl_agent.export_q_table())
         print(f"\nBest model saved to {branchy_weights_path}\nQ-table saved to {q_table_path}")
@@ -833,7 +826,6 @@ def run_experiments(dataset_name):
     plot_class_distribution(class_distributions, dataset_name)
     return results
 
-# Main Execution
 if __name__ == "__main__":
     torch.manual_seed(42)
     np.random.seed(42)

@@ -1,8 +1,3 @@
-"""
-This code implements a BranchyVGG model with 3 early exits using Q-learning-based dynamic exits,
-training on CIFAR-10, evaluation, power monitoring, and visualization of results.
-"""
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -28,10 +23,6 @@ import queue
 
 from torch.cuda.amp import GradScaler, autocast
 
-# =======================
-# Model Definitions
-# =======================
-
 class QLearningAgent:
     @staticmethod
     def _q_table_factory():
@@ -45,7 +36,7 @@ class QLearningAgent:
         self.q_table = defaultdict(QLearningAgent._q_table_factory)
 
     def export_q_table(self):
-        # Convert defaultdict to a normal dict for pickling/saving
+       
         return {k: v.copy() for k, v in self.q_table.items()}
 
     def get_state(self, layer_idx, confidence):
@@ -174,10 +165,9 @@ class BranchyVGG(nn.Module):
         super(BranchyVGG, self).__init__()
         self.num_classes = num_classes
         self.training_mode = True
-        self.exit_loss_weights = [0.15, 0.15, 0.20, 0.50]  # For 3 early exits + final classifier
+        self.exit_loss_weights = [0.15, 0.15, 0.20, 0.50]  
         self.rl_agent = QLearningAgent(n_exits=3)
 
-        # Exit 1 from Block 1
         self.features1 = nn.Sequential(
             nn.Conv2d(in_channels, 64, kernel_size=3, padding=1),
             nn.BatchNorm2d(64),
@@ -189,7 +179,6 @@ class BranchyVGG(nn.Module):
         )
         self.exit1 = EarlyExitBlock(64, num_classes)
 
-        # Exit 2 from combined Blocks 2 & 3
         self.features2 = nn.Sequential(
             nn.Conv2d(64, 128, kernel_size=3, padding=1),
             nn.BatchNorm2d(128),
@@ -211,7 +200,6 @@ class BranchyVGG(nn.Module):
         )
         self.exit2 = EarlyExitBlock(256, num_classes)
 
-        # Exit 3 from combined Blocks 4 & 5
         self.features3 = nn.Sequential(
             nn.Conv2d(256, 512, kernel_size=3, padding=1),
             nn.BatchNorm2d(512),
@@ -302,7 +290,7 @@ class BranchyVGG(nn.Module):
         if len(remaining_indices) > 0:
             final_output = self.classifier(x_current)
             final_outputs[remaining_indices] = final_output
-            exit_points[remaining_indices] = 4  # Final classifier exit
+            exit_points[remaining_indices] = 4  
 
         return final_outputs, exit_points
 
@@ -359,10 +347,7 @@ class BranchyVGG(nn.Module):
                         self.rl_agent.update(state, action, reward, next_state)
         return total_loss
         
-# =======================
 # Data Loading
-# =======================
-
 def load_datasets(batch_size=32):
     train_transform = transforms.Compose([
         transforms.RandomHorizontalFlip(),
@@ -380,9 +365,6 @@ def load_datasets(batch_size=32):
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
     return train_loader, test_loader
 
-# =======================
-# Training & Evaluation Functions
-# =======================
 
 def train_static_vgg(model, train_loader, test_loader=None, num_epochs=100, learning_rate=0.001, weights_path=None):
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
@@ -647,10 +629,7 @@ def evaluate_branchy_vgg(model, test_loader):
     print(f"Weighted Average Inference Time: {final_inference_time_ms:.2f} ms")
     return accuracy, final_inference_time_ms, exit_percentages
 
-# =======================
 # Power Monitoring
-# =======================
-
 class PowerMonitor:
     def __init__(self):
         try:
@@ -741,10 +720,6 @@ def measure_power_consumption(model, test_loader, num_samples=100, device='cuda'
             results['energy'].append(energy)
             results['inference_time'].append(inference_time / batch_size)
     return {k: np.mean(v) if v else 0 for k, v in results.items()}
-
-# =======================
-# Visualization & Analysis
-# =======================
 
 def create_output_directory(dataset_name):
     output_dir = f'plots_{dataset_name.lower()}'
@@ -918,10 +893,6 @@ def plot_confusion_matrix(model, test_loader, is_branchy=False, dataset_name='ci
     model_type = 'branchy' if is_branchy else 'static'
     plt.savefig(os.path.join(output_dir, f'{dataset_name.lower()}_{model_type}_confusion_matrix.png'), dpi=300, bbox_inches='tight')
     plt.close()
-
-# =======================
-# Experiment Runner
-# =======================
 
 def run_experiments():
     print("\nRunning experiments on CIFAR-10...")

@@ -23,9 +23,8 @@ import queue
 
 from torch.cuda.amp import GradScaler, autocast
 
-# -------------------------------------------------------
+
 # Q-Learning Agent
-# -------------------------------------------------------
 class QLearningAgent:
     @staticmethod
     def _q_table_factory():
@@ -39,7 +38,6 @@ class QLearningAgent:
         self.q_table = defaultdict(QLearningAgent._q_table_factory)
 
     def export_q_table(self):
-        # Convert defaultdict to a normal dict for pickling/saving
         return {k: v.copy() for k, v in self.q_table.items()}
 
     def get_state(self, layer_idx, confidence):
@@ -57,9 +55,7 @@ class QLearningAgent:
         td_error = td_target - self.q_table[state][action]
         self.q_table[state][action] += self.alpha * td_error
 
-# -------------------------------------------------------
 # Early Exit Block
-# -------------------------------------------------------
 class EarlyExitBlock(nn.Module):
     def __init__(self, in_channels, num_classes):
         super(EarlyExitBlock, self).__init__()
@@ -75,9 +71,6 @@ class EarlyExitBlock(nn.Module):
     def forward(self, x):
         return self.head(x)
 
-# -------------------------------------------------------
-# ResNet-18 Building Blocks
-# -------------------------------------------------------
 class BasicBlock(nn.Module):
     expansion = 1
     def __init__(self, in_planes, planes, stride=1):
@@ -101,9 +94,6 @@ class BasicBlock(nn.Module):
         out = self.relu(out)
         return out
 
-# -------------------------------------------------------
-# Static ResNet-18
-# -------------------------------------------------------
 class StaticResNet18(nn.Module):
     def __init__(self, num_classes=10, in_channels=3):
         super(StaticResNet18, self).__init__()
@@ -149,9 +139,6 @@ class StaticResNet18(nn.Module):
         x = self.fc(x)
         return x
 
-# -------------------------------------------------------
-# Branchy ResNet-18 with 4 Early Exits
-# -------------------------------------------------------
 class BranchyResNet18(nn.Module):
     def __init__(self, num_classes=10, in_channels=3):
         super(BranchyResNet18, self).__init__()
@@ -283,9 +270,6 @@ class BranchyResNet18(nn.Module):
                         self.rl_agent.update(state, action, reward, next_state)
         return total_loss
 
-# -------------------------------------------------------
-# Data Loading
-# -------------------------------------------------------
 def load_datasets(batch_size=128):
     train_transform = transforms.Compose([
         transforms.RandomCrop(32, padding=4),
@@ -305,11 +289,7 @@ def load_datasets(batch_size=128):
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
     return train_loader, test_loader
 
-# -------------------------------------------------------
-# Training & Evaluation Functions
-# -------------------------------------------------------
 def train_static_resnet(model, train_loader, test_loader=None, num_epochs=100, learning_rate=0.1, weights_path=None):
-    # This function is adapted for training Static ResNet18
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=5e-4)
     def cosine_annealing_with_warmup(epoch):
@@ -317,7 +297,6 @@ def train_static_resnet(model, train_loader, test_loader=None, num_epochs=100, l
         if epoch < warmup_epochs:
             return (epoch + 1) / warmup_epochs
         if num_epochs == warmup_epochs:
-            # Avoid division by zero: keep LR constant after warmup
             return 1.0
         return 0.5 * (1 + np.cos(np.pi * (epoch - warmup_epochs) / (num_epochs - warmup_epochs)))
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, cosine_annealing_with_warmup)
@@ -368,7 +347,6 @@ def train_branchy_resnet(model, train_loader, test_loader, num_epochs=100, learn
         if epoch < warmup_epochs:
             return (epoch + 1) / warmup_epochs
         if num_epochs == warmup_epochs:
-            # Avoid division by zero: keep LR constant after warmup
             return 1.0
         return 0.5 * (1 + np.cos(np.pi * (epoch - warmup_epochs) / (num_epochs - warmup_epochs)))
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, cosine_annealing_with_warmup)
@@ -588,9 +566,6 @@ def measure_power_consumption(model, test_loader, num_samples=100, device='cuda'
             results['inference_time'].append(inference_time / batch_size)
     return {k: np.mean(v) if v else 0 for k,v in results.items()}
 
-# -------------------------------------------------------
-# Exit Time Calibration Function
-# -------------------------------------------------------
 def calibrate_exit_times_resnet(model, device, loader, n_batches=10):
     """
     Measure cumulative per-exit times (seconds/sample) for BranchyResNet18 via CUDA events.
@@ -647,9 +622,6 @@ def calibrate_exit_times_resnet(model, device, loader, n_batches=10):
     print(f"Calibrated ResNet exit times (s/sample): {avg_exit_times_s}")
     return avg_exit_times_s
 
-# -------------------------------------------------------
-# Visualization & Analysis Functions
-# -------------------------------------------------------
 def create_output_directory(dataset_name):
     output_dir = f'plots_{dataset_name.lower()}'
     if not os.path.exists(output_dir):
@@ -837,9 +809,6 @@ def plot_confusion_matrix(model, test_loader, is_branchy=False, dataset_name='ci
     plt.savefig(os.path.join(output_dir, f'{dataset_name.lower()}_{model_type}_confusion_matrix.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
-# -------------------------------------------------------
-# Experiment Runner
-# -------------------------------------------------------
 def run_experiments():
     dataset_name = 'cifar10'
     print(f"\nRunning experiments on {dataset_name.upper()}...")
@@ -897,7 +866,6 @@ def run_experiments():
             'state_dict': branchy_resnet.state_dict(),
             'accuracy': evaluate_branchy_resnet(branchy_resnet, test_loader)[0]
         }, branchy_weights_path)
-        # Save Q-table values for RL analysis
         q_table_path = os.path.splitext(branchy_weights_path)[0] + "_q_table.npy"
         np.save(q_table_path, branchy_resnet.rl_agent.export_q_table())
         print(f"\nBest model saved to {branchy_weights_path}\nQ-table saved to {q_table_path}")

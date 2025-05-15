@@ -28,10 +28,6 @@ import queue
 
 from torch.cuda.amp import GradScaler, autocast
 
-# =======================
-# Model Definitions
-# =======================
-
 class QLearningAgent:
     @staticmethod
     def _q_table_factory():
@@ -45,7 +41,6 @@ class QLearningAgent:
         self.q_table = defaultdict(QLearningAgent._q_table_factory)
 
     def export_q_table(self):
-        # Convert defaultdict to a normal dict for pickling/saving
         return {k: v.copy() for k, v in self.q_table.items()}
 
     def get_state(self, layer_idx, confidence):
@@ -174,11 +169,9 @@ class BranchyVGG(nn.Module):
         super(BranchyVGG, self).__init__()
         self.num_classes = num_classes
         self.training_mode = True
-        self.exit_loss_weights = [0.2, 0.3, 0.5]  # For 2 early exits + final classifier
+        self.exit_loss_weights = [0.2, 0.3, 0.5]  
         self.rl_agent = QLearningAgent(n_exits=2)
 
-        # Feature blocks
-        # Block 1 with Early Exit 1
         self.features1 = nn.Sequential(
             nn.Conv2d(in_channels, 64, kernel_size=3, padding=1),
             nn.BatchNorm2d(64),
@@ -190,7 +183,6 @@ class BranchyVGG(nn.Module):
         )
         self.exit1 = EarlyExitBlock(64, num_classes)
 
-        # Combine Blocks 2 & 3 (no exit here)
         self.features2 = nn.Sequential(
             nn.Conv2d(64, 128, kernel_size=3, padding=1),
             nn.BatchNorm2d(128),
@@ -270,7 +262,6 @@ class BranchyVGG(nn.Module):
         remaining_indices = torch.arange(batch_size, device=device)
         x_current = x
 
-        # First early exit after features1
         x_current = self.features1(x_current)
         exit_output = self.exit1(x_current)
         softmax_output = torch.softmax(exit_output, dim=1)
@@ -339,7 +330,6 @@ class BranchyVGG(nn.Module):
         criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
         for output, weight in zip(outputs, self.exit_loss_weights):
             total_loss += weight * criterion(output, labels)
-        # RL updates at early exits (exit1 and exit2)
         x_current = x
         remaining_indices = torch.arange(batch_size, device=device)
         x_current = self.features1(x_current)
@@ -351,7 +341,7 @@ class BranchyVGG(nn.Module):
             action = self.rl_agent.select_action(state, training=True)
             correct = (pred == labels[remaining_indices[i]])
             r = self._calculate_reward(0, correct)
-            next_state = state  # Dummy next state for exit1 update
+            next_state = state  
             self.rl_agent.update(state, action, r, next_state)
         x2 = self.features2(x_current)
         x3 = self.features3(x2)
@@ -366,10 +356,6 @@ class BranchyVGG(nn.Module):
             next_state = state
             self.rl_agent.update(state, action, r, next_state)
         return total_loss
-
-# =======================
-# Data Loading
-# =======================
 
 def load_datasets(batch_size=32):
     train_transform = transforms.Compose([
@@ -387,10 +373,6 @@ def load_datasets(batch_size=32):
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True)
     return train_loader, test_loader
-
-# =======================
-# Training & Evaluation Functions
-# =======================
 
 def train_static_vgg(model, train_loader, test_loader=None, num_epochs=100, learning_rate=0.001, weights_path=None):
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
@@ -651,10 +633,6 @@ def evaluate_branchy_vgg(model, test_loader):
     print(f"Weighted Average Inference Time: {final_inference_time_ms:.2f} ms")
     return accuracy, final_inference_time_ms, exit_percentages
 
-# =======================
-# Power Monitoring
-# =======================
-
 class PowerMonitor:
     def __init__(self):
         try:
@@ -745,10 +723,6 @@ def measure_power_consumption(model, test_loader, num_samples=100, device='cuda'
             results['energy'].append(energy)
             results['inference_time'].append(inference_time / batch_size)
     return {k: np.mean(v) if v else 0 for k, v in results.items()}
-
-# =======================
-# Visualization & Analysis Functions
-# =======================
 
 def create_output_directory(dataset_name):
     output_dir = f'plots_{dataset_name.lower()}'
@@ -925,10 +899,6 @@ def plot_confusion_matrix(model, test_loader, is_branchy=False, dataset_name='ci
     model_type = 'branchy' if is_branchy else 'static'
     plt.savefig(os.path.join(output_dir, f'{dataset_name.lower()}_{model_type}_confusion_matrix.png'), dpi=300, bbox_inches='tight')
     plt.close()
-
-# =======================
-# Experiment Runner
-# =======================
 
 def run_experiments():
     print("\nRunning experiments on CIFAR-10...")

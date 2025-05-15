@@ -843,7 +843,9 @@ def run_experiments(dataset_name):
     plot_class_distribution(class_distributions, dataset_name)
     return results
 
+# ---------------------------
 # Main Execution
+# ---------------------------
 if __name__ == "__main__":
     torch.manual_seed(42)
     np.random.seed(42)
