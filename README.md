@@ -6,7 +6,7 @@ Deep neural networks achieve state-of-the-art performance in many tasks by extra
 
 ![DDECS Architecture](Architecture.png)
 
-*Figure 1: DDECS Architecture - A dynamic early-exit DNN with multiple side branches. Each branch can make predictions, and a reinforcement learning agent dynamically decides whether to exit at each branch based on prediction confidence and system constraints.*
+*Figure 1: Architecture Overview - A dynamic early-exit DNN with multiple side branches. Each branch can make predictions, and a reinforcement learning agent dynamically decides whether to exit at each branch based on prediction confidence and system constraints.*
 
 This repository contains code to reproduce results from our paper *“RL-Agent-based Early-Exit DNN Architecture Search Framework,”* which demonstrates how dynamically optimized early exits can deliver significant inference speedups (up to 69.7×) and reduce power consumption, all while maintaining accuracy within 1–2% of a static network baseline.
 
