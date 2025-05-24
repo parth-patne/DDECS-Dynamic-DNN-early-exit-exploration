@@ -453,13 +453,10 @@ def evaluate_branchy_alexnet(model, test_loader):
                 exit_counts[exit_idx] += count
     accuracy = 100 * correct / total_samples if total_samples > 0 else 0
     exit_percentages = {k: (v / total_samples) * 100 for k, v in exit_counts.items()} if total_samples > 0 else {k: 0 for k in exit_indices}
-    print("Calibrating BranchyAlexNet exit times...")
-    calibrated_times = calibrate_exit_times_alexnet(model, device, test_loader, n_batches=20)
-    if len(calibrated_times) < len(exit_indices):
-        calibrated_times = list(calibrated_times) + [0.0] * (len(exit_indices) - len(calibrated_times))
-    elif len(calibrated_times) > len(exit_indices):
-        calibrated_times = calibrated_times[:len(exit_indices)]
-    weighted_avg_time_s = 0.0
+
+    avg_inference_time_ms = (total_batch_processing_time / total_samples) * 1000 if total_samples > 0 else 0
+    
+    return accuracy, avg_inference_time_ms, exit_percentages
 
 def calibrate_exit_times_alexnet(model, device, loader, n_batches=10):
     """
@@ -603,9 +600,6 @@ def measure_power_consumption(model, test_loader, num_samples=100, device='cuda'
             results['inference_time'].append(inference_time / batch_size)
     return {k: np.mean(v) if v else 0 for k,v in results.items()}
 
-# -------------------------------------------------------
-# Visualization & Analysis Functions
-# -------------------------------------------------------
 def create_output_directory(dataset_name):
     output_dir = f'plots_{dataset_name.lower()}'
     if not os.path.exists(output_dir):
