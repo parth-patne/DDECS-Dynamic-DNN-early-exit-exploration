@@ -16,7 +16,6 @@ This repository contains code to reproduce results from our paper *“RL-Agent-b
 
 If you use this codebase or build upon our RL-based early-exit approach, please cite:
 
-```bibtex
 @INPROCEEDINGS{11006795,
   author={Taheri, Mahdi and Patne, Parth and Cherezova, Natalia and Mahani, Ali and Herglotz, Christian and Jenihhin, Maksim},
   booktitle={2025 IEEE 28th International Symposium on Design and Diagnostics of Electronic Circuits and Systems (DDECS)}, 
