@@ -26,6 +26,7 @@ If you use this codebase or build upon our RL-based early-exit approach, please 
   keywords={Training;Energy consumption;Accuracy;Power demand;Artificial neural networks;Reinforcement learning;Benchmark testing;Dynamic scheduling;Real-time systems;Optimization;deep neural networks;dynamic DNNs;early exit},
   doi={10.1109/DDECS63720.2025.11006795}
 }
+```
 
 ## Requirements
 
