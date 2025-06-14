@@ -1,5 +1,7 @@
 # DDECS - Dynamic DNN Early Exit Exploration
 
+[![Paper](https://img.shields.io/badge/paper-IEEE-blue.svg)](https://doi.org/10.1109/DDECS63720.2025.11006795)
+
 Deep neural networks achieve state-of-the-art performance in many tasks by extracting increasingly high-level features at deeper layers. However, the added depth often comes with higher latency and energy usage during inference—prohibitive for real-time or energy-constrained applications. To address these challenges, our framework integrates **Reinforcement Learning (RL)** with **BranchyNet-inspired** side branches, allowing high-confidence samples to exit early while only complex cases propagate to deeper layers.
 
 ## Architecture Overview
